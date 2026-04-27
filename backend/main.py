@@ -1,14 +1,18 @@
 import os
+import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
 import numpy as np
 from sklearn.linear_model import LinearRegression
 from motor.motor_asyncio import AsyncIOMotorClient
 
+# Setup logging to see errors in HuggingFace "Logs" tab
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 app = FastAPI()
 
-# Enable CORS so your Vercel frontend can talk to your HuggingFace backend
+# Master CORS Setup
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -17,43 +21,57 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Connect to MongoDB Atlas using the Secret variable set in HuggingFace
+# Connect to MongoDB
 MONGO_URI = os.getenv("MONGODB_URI")
 client = AsyncIOMotorClient(MONGO_URI)
-# We are using the 'sample_analytics' database preloaded by Atlas
-db = client.sample_analytics 
+# We will check both 'sample_analytics' and 'sample_supplies' to find data
+db_analytics = client.sample_analytics
+db_supplies = client.sample_supplies
 
 @app.get("/")
 async def read_root():
-    return {"status": "Connected to MongoDB Atlas"}
+    return {"status": "Vault BD API is online and connected to Atlas"}
 
 @app.get("/analytics")
 async def get_db_spending():
     try:
-        # Runs a real MongoDB Aggregation pipeline on the 'accounts' collection
+        # Strategy: Try to get product data from the 'sales' collection in sample_supplies
+        # It's usually the most reliable sample dataset for counting categories
         pipeline = [
-            {"$unwind": "$products"},
-            {"$group": {"_id": "$products", "count": {"$sum": 1}}},
-            {"$sort": {"count": -1}}
+            {"$unwind": "$items"},
+            {"$group": {"_id": "$items.name", "count": {"$sum": 1}}},
+            {"$sort": {"count": -1}},
+            {"$limit": 8}
         ]
-        cursor = db.accounts.aggregate(pipeline)
+        
+        # Try sample_supplies first
+        cursor = db_supplies.sales.aggregate(pipeline)
         results = await cursor.to_list(length=10)
+        
+        # If empty, try the other sample database
+        if not results:
+            logger.info("Sample supplies empty, trying sample_analytics")
+            pipeline_alt = [
+                {"$unwind": "$products"},
+                {"$group": {"_id": "$products", "count": {"$sum": 1}}}
+            ]
+            cursor = db_analytics.accounts.aggregate(pipeline_alt)
+            results = await cursor.to_list(length=10)
+
         return {"category_summaries": results}
     except Exception as e:
-        return {"error": str(e)}
+        logger.error(f"MongoDB Error: {e}")
+        return {"category_summaries": [{"_id": "Error fetching data", "count": 0}]}
 
 @app.post("/analyze")
 async def analyze_spending():
-    # Currently uses mock data for the Z-score and Linear Regression logic
-    # In the next phase, we will fetch this directly from your own MongoDB collections
+    # Mock data for demonstration - next phase will use real data from your 'transactions'
     amounts = [120, 150, 135, 450, 140, 160] 
     
-    # 1. Z-Score Anomaly Detection
     mean = np.mean(amounts)
     std = np.std(amounts)
     anomalies = [x for x in amounts if abs((x - mean) / std) > 2] if std > 0 else []
 
-    # 2. Linear Regression Forecasting
     X = np.array(range(len(amounts))).reshape(-1, 1)
     y = np.array(amounts)
     model = LinearRegression().fit(X, y)
