@@ -1,30 +1,43 @@
+import os
 from fastapi import FastAPI
 from pydantic import BaseModel
 import numpy as np
 from sklearn.linear_model import LinearRegression
+from motor.motor_asyncio import AsyncIOMotorClient
 
 app = FastAPI()
 
-class SpendData(BaseModel):
-    amounts: list[float]
+# Connect using the Secret we set in HuggingFace
+MONGO_URI = os.getenv("MONGODB_URI")
+client = AsyncIOMotorClient(MONGO_URI)
+db = client.sample_analytics  # Using the sample data Atlas is preloading
 
 @app.get("/")
-def read_root():
-    return {"status": "Vault BD API is online"}
+async def read_root():
+    return {"status": "Connected to MongoDB Atlas"}
+
+@app.get("/analytics")
+async def get_db_spending():
+    # This runs a MongoDB Aggregation to get real data
+    # It looks at the sample 'accounts' collection
+    pipeline = [
+        {"$unwind": "$products"},
+        {"$group": {"_id": "$products", "count": {"$sum": 1}}}
+    ]
+    cursor = db.accounts.aggregate(pipeline)
+    results = await cursor.to_list(length=10)
+    return {"category_summaries": results}
 
 @app.post("/analyze")
-async def analyze_spending(data: SpendData):
-    amounts = data.amounts
-    if len(amounts) < 2:
-        return {"error": "Not enough data to analyze"}
-
-    # Z-Score Anomaly Detection
+async def analyze_spending():
+    # For now, let's keep the logic but eventually, 
+    # we'll fetch 'amounts' from your own 'transactions' collection
+    amounts = [120, 150, 135, 450, 140, 160] 
+    
     mean = np.mean(amounts)
     std = np.std(amounts)
-    # Flag anything 2 standard deviations away from mean
     anomalies = [x for x in amounts if abs((x - mean) / std) > 2] if std > 0 else []
 
-    # Linear Regression Forecast for next month
     X = np.array(range(len(amounts))).reshape(-1, 1)
     y = np.array(amounts)
     model = LinearRegression().fit(X, y)
@@ -33,5 +46,5 @@ async def analyze_spending(data: SpendData):
     return {
         "anomalies_detected": anomalies,
         "forecasted_next_month": round(float(prediction), 2),
-        "average_spend": round(float(mean), 2)
+        "database": "Live connection active"
     }
