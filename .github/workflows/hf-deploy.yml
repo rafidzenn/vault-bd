@@ -19,5 +19,12 @@ jobs:
         run: |
           git config --global user.email "action@github.com"
           git config --global user.name "GitHub Action"
-          # This specifically pushes the backend folder to the HF Space root
-          git subtree push --prefix backend https://rafidzenn:$HF_TOKEN@huggingface.co/spaces/rafidzenn/vault-bd-api main
+          
+          # 1. Create a temporary branch from the current state
+          git checkout -b temp-hf-deploy
+          
+          # 2. Extract only the 'backend' folder to become the new root
+          git filter-branch -f --prune-empty --subdirectory-filter backend temp-hf-deploy
+          
+          # 3. Force push this 'backend-only' history to HuggingFace
+          git push --force https://rafidzenn:$HF_TOKEN@huggingface.co/spaces/rafidzenn/vault-bd-api temp-hf-deploy:main
