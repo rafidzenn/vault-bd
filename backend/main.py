@@ -1,5 +1,6 @@
 import os
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import numpy as np
 from sklearn.linear_model import LinearRegression
@@ -7,10 +8,20 @@ from motor.motor_asyncio import AsyncIOMotorClient
 
 app = FastAPI()
 
-# Connect using the Secret we set in HuggingFace
+# Enable CORS so your Vercel frontend can talk to your HuggingFace backend
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Connect to MongoDB Atlas using the Secret variable set in HuggingFace
 MONGO_URI = os.getenv("MONGODB_URI")
 client = AsyncIOMotorClient(MONGO_URI)
-db = client.sample_analytics  # Using the sample data Atlas is preloading
+# We are using the 'sample_analytics' database preloaded by Atlas
+db = client.sample_analytics 
 
 @app.get("/")
 async def read_root():
@@ -18,26 +29,31 @@ async def read_root():
 
 @app.get("/analytics")
 async def get_db_spending():
-    # This runs a MongoDB Aggregation to get real data
-    # It looks at the sample 'accounts' collection
-    pipeline = [
-        {"$unwind": "$products"},
-        {"$group": {"_id": "$products", "count": {"$sum": 1}}}
-    ]
-    cursor = db.accounts.aggregate(pipeline)
-    results = await cursor.to_list(length=10)
-    return {"category_summaries": results}
+    try:
+        # Runs a real MongoDB Aggregation pipeline on the 'accounts' collection
+        pipeline = [
+            {"$unwind": "$products"},
+            {"$group": {"_id": "$products", "count": {"$sum": 1}}},
+            {"$sort": {"count": -1}}
+        ]
+        cursor = db.accounts.aggregate(pipeline)
+        results = await cursor.to_list(length=10)
+        return {"category_summaries": results}
+    except Exception as e:
+        return {"error": str(e)}
 
 @app.post("/analyze")
 async def analyze_spending():
-    # For now, let's keep the logic but eventually, 
-    # we'll fetch 'amounts' from your own 'transactions' collection
+    # Currently uses mock data for the Z-score and Linear Regression logic
+    # In the next phase, we will fetch this directly from your own MongoDB collections
     amounts = [120, 150, 135, 450, 140, 160] 
     
+    # 1. Z-Score Anomaly Detection
     mean = np.mean(amounts)
     std = np.std(amounts)
     anomalies = [x for x in amounts if abs((x - mean) / std) > 2] if std > 0 else []
 
+    # 2. Linear Regression Forecasting
     X = np.array(range(len(amounts))).reshape(-1, 1)
     y = np.array(amounts)
     model = LinearRegression().fit(X, y)
@@ -46,5 +62,6 @@ async def analyze_spending():
     return {
         "anomalies_detected": anomalies,
         "forecasted_next_month": round(float(prediction), 2),
+        "average_spend": round(float(mean), 2),
         "database": "Live connection active"
     }
